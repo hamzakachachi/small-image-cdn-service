@@ -107,23 +107,3 @@ With the default config this is:
 ```text
 /cdn/products/...
 ```
-
-## Laravel Integration
-
-In the Laravel app:
-
-```env
-IMAGE_CDN_URL=https://cdn-api.example.com
-IMAGE_CDN_TOKEN=the-same-token-as-API_TOKEN
-IMAGE_CDN_TIMEOUT=60
-```
-
-Laravel stays responsible for NovaEngel login and temporary URL lookup. This service never receives NovaEngel credentials.
-
-Run the sync from Laravel:
-
-```bash
-php artisan novaengel:sync-images --limit=20 --batch=5
-```
-
-See the Laravel project docs at `docs/nova-image-cdn-integration.md` for the full integration guide.
