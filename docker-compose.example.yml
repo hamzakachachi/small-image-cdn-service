@@ -1,0 +1,17 @@
+services:
+  nova-image-cdn:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      API_TOKEN: "${API_TOKEN}"
+      CDN_BASE_URL: "${CDN_BASE_URL}"
+      STORAGE_ROOT: /data/images
+      PUBLIC_PATH_PREFIX: cdn
+    volumes:
+      - nova_image_cdn_data:/data/images
+
+volumes:
+  nova_image_cdn_data:
