@@ -1,5 +1,6 @@
 services:
   nova-image-cdn:
+    container_name: nova-image-cdn
     build: .
     restart: unless-stopped
     ports:
