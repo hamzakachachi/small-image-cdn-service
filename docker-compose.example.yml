@@ -13,6 +13,12 @@ services:
       PUBLIC_PATH_PREFIX: cdn
     volumes:
       - nova_image_cdn_data:/data/images
+    networks:
+      - web
 
 volumes:
   nova_image_cdn_data:
+
+networks:
+  web:
+    external: true

@@ -13,6 +13,7 @@ const API_TOKEN = process.env.API_TOKEN || '';
 const MAX_SOURCE_BYTES = Number(process.env.MAX_SOURCE_BYTES || 15 * 1024 * 1024);
 const MIN_SOURCE_BYTES = Number(process.env.MIN_SOURCE_BYTES || 500);
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS || 30000);
+const JSON_LIMIT_BYTES = Math.ceil(MAX_SOURCE_BYTES * 1.4) + 1024;
 
 const variants = {
   thumb: { width: 168, height: 180 },
@@ -22,7 +23,7 @@ const variants = {
 
 const app = express();
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: `${JSON_LIMIT_BYTES}b` }));
 app.use(PUBLIC_PATH_PREFIX, express.static(STORAGE_ROOT, {
   immutable: true,
   maxAge: '365d',
@@ -34,8 +35,15 @@ app.get('/health', (req, res) => {
 
 app.post('/v1/images/import', requireToken, async (req, res, next) => {
   try {
-    const { external_id: externalId, source_url: sourceUrl, force = false } = req.body || {};
-    validateImportPayload(externalId, sourceUrl);
+    const {
+      external_id: externalId,
+      source_url: sourceUrl,
+      image_base64: imageBase64,
+      mime,
+      force = false,
+    } = req.body || {};
+
+    validateImportPayload(externalId, sourceUrl, imageBase64, mime);
 
     const key = buildStorageKey(externalId);
     const dir = path.join(STORAGE_ROOT, key);
@@ -51,42 +59,16 @@ app.post('/v1/images/import', requireToken, async (req, res, next) => {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.mkdir(dir, { recursive: true });
 
-    const imageBuffer = await downloadImage(sourceUrl);
-    const metadata = await sharp(imageBuffer, { failOn: 'truncated' }).metadata();
-    const ext = extensionForFormat(metadata.format);
-    const checksum = crypto.createHash('sha256').update(imageBuffer).digest('hex');
-    const originalName = `original.${ext}`;
+    const imageBuffer = imageBase64 ? decodeImageBase64(imageBase64) : await downloadImage(sourceUrl);
+    validateImageSize(imageBuffer);
 
-    await fs.writeFile(path.join(dir, originalName), imageBuffer);
-
-    const urls = {
-      original: publicUrl(key, originalName),
-    };
-
-    await Promise.all(Object.entries(variants).map(async ([name, size]) => {
-      const fileName = `${name}.${ext}`;
-      await sharp(imageBuffer)
-        .rotate()
-        .resize(size.width, size.height, {
-          fit: 'inside',
-          withoutEnlargement: true,
-        })
-        .toFormat(outputFormat(ext), { quality: 85 })
-        .toFile(path.join(dir, fileName));
-      urls[name] = publicUrl(key, fileName);
-    }));
-
-    const manifest = {
-      external_id: externalId,
-      urls,
-      mime: mimeForExtension(ext),
-      checksum,
-      bytes: imageBuffer.length,
-      width: metadata.width || null,
-      height: metadata.height || null,
-    };
-
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const manifest = await storeImageBuffer({
+      externalId,
+      key,
+      dir,
+      manifestPath,
+      imageBuffer,
+    });
 
     res.status(201).json(manifest);
   } catch (error) {
@@ -108,6 +90,46 @@ app.delete('/v1/images/:external_id', requireToken, async (req, res, next) => {
   }
 });
 
+async function storeImageBuffer({ externalId, key, dir, manifestPath, imageBuffer }) {
+  const metadata = await sharp(imageBuffer, { failOn: 'truncated' }).metadata();
+  const ext = extensionForFormat(metadata.format);
+  const checksum = crypto.createHash('sha256').update(imageBuffer).digest('hex');
+  const originalName = `original.${ext}`;
+
+  await fs.writeFile(path.join(dir, originalName), imageBuffer);
+
+  const urls = {
+    original: publicUrl(key, originalName),
+  };
+
+  await Promise.all(Object.entries(variants).map(async ([name, size]) => {
+    const fileName = `${name}.${ext}`;
+    await sharp(imageBuffer)
+      .rotate()
+      .resize(size.width, size.height, {
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .toFormat(outputFormat(ext), { quality: 85 })
+      .toFile(path.join(dir, fileName));
+    urls[name] = publicUrl(key, fileName);
+  }));
+
+  const manifest = {
+    external_id: externalId,
+    urls,
+    mime: mimeForExtension(ext),
+    checksum,
+    bytes: imageBuffer.length,
+    width: metadata.width || null,
+    height: metadata.height || null,
+  };
+
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  return manifest;
+}
+
 app.use((error, req, res, next) => {
   const status = error.statusCode || 500;
   res.status(status).json({
@@ -128,8 +150,20 @@ function requireToken(req, res, next) {
   next();
 }
 
-function validateImportPayload(externalId, sourceUrl) {
+function validateImportPayload(externalId, sourceUrl, imageBase64, mime) {
   validateExternalId(externalId);
+
+  if (imageBase64) {
+    if (typeof imageBase64 !== 'string') {
+      throw badRequest('image_base64 must be a string');
+    }
+
+    if (mime && (typeof mime !== 'string' || !mime.toLowerCase().startsWith('image/'))) {
+      throw badRequest('mime must be an image content type');
+    }
+
+    return;
+  }
 
   let url;
   try {
@@ -175,17 +209,31 @@ async function downloadImage(sourceUrl) {
 
     const buffer = await readResponseBody(response);
 
-    if (buffer.length < MIN_SOURCE_BYTES) {
-      throw badRequest('source image is too small');
-    }
-
-    if (buffer.length > MAX_SOURCE_BYTES) {
-      throw badRequest('source image is too large');
-    }
+    validateImageSize(buffer);
 
     return buffer;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function decodeImageBase64(imageBase64) {
+  const buffer = Buffer.from(imageBase64, 'base64');
+
+  if (buffer.length === 0 || buffer.toString('base64') !== imageBase64.replace(/\s/g, '')) {
+    throw badRequest('image_base64 is not valid base64');
+  }
+
+  return buffer;
+}
+
+function validateImageSize(buffer) {
+  if (buffer.length < MIN_SOURCE_BYTES) {
+    throw badRequest('source image is too small');
+  }
+
+  if (buffer.length > MAX_SOURCE_BYTES) {
+    throw badRequest('source image is too large');
   }
 }
 

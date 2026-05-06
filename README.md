@@ -70,6 +70,17 @@ Use a long random value for `API_TOKEN`. Laravel must use the same value as `IMA
 }
 ```
 
+If the temporary source URL is only reachable from Laravel's host, the same endpoint can receive an uploaded image instead:
+
+```json
+{
+  "external_id": "novaengel_189313",
+  "image_base64": "base64-encoded-image-bytes",
+  "mime": "image/jpeg",
+  "force": false
+}
+```
+
 Requires `Authorization: Bearer <API_TOKEN>`.
 
 Response:

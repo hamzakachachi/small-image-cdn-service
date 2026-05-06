@@ -85,6 +85,23 @@ test('returns existing manifest without force', async () => {
   assert.equal((await response.json()).external_id, 'novaengel_123');
 });
 
+test('imports an uploaded base64 image when source URL fetch is not usable', async () => {
+  const response = await importImage({
+    external_id: 'novaengel_upload',
+    image_base64: imageBuffer.toString('base64'),
+    mime: 'image/jpeg',
+    force: true,
+  });
+
+  assert.equal(response.status, 201);
+  const body = await response.json();
+
+  assert.equal(body.external_id, 'novaengel_upload');
+  assert.equal(body.mime, 'image/jpeg');
+  assert.ok(body.urls.original.endsWith('/original.jpg'));
+  assert.ok(body.urls.cover.endsWith('/cover.jpg'));
+});
+
 test('rejects invalid bearer token', async () => {
   const response = await fetch(`${appUrl}/v1/images/import`, {
     method: 'POST',
